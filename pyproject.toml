@@ -1,0 +1,29 @@
+[build-system]
+requires = ["scikit-build-core>=0.12", "nanobind>=2.12"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "fastjsondiff"
+version = "0.1.0"
+description = "A C++ port of jsondiff to improve performance"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["PyYAML>=6.0"]
+authors = [{ name = "Vedant" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "License :: OSI Approved :: MIT License",
+]
+
+[project.urls]
+Homepage = "https://github.com/Ved235/fastjsondiff"
+
+[project.scripts]
+fastjdiff = "fastjsondiff.cli:main"
+
+[tool.scikit-build]
+wheel.packages = ["fastjsondiff"]
+build-dir = "build/{wheel_tag}"
+
+[tool.pytest.ini_options]
