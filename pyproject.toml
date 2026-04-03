@@ -9,7 +9,7 @@ description = "A C++ port of jsondiff to improve performance"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["PyYAML>=6.0"]
-authors = [{ name = "Vedant" }]
+authors = [{ name = "Vedant" }, { name = "Rian"}]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: C++",
