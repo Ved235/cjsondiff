@@ -261,6 +261,121 @@ static nb::set set_from_vector(const std::vector<nb::object> &items) {
     return result;
 }
 
+static long as_long(nb::handle obj) {
+    long value = PyLong_AsLong(obj.ptr());
+    if (value == -1 && PyErr_Occurred() != nullptr) {
+        throw nb::python_error();
+    }
+    return value;
+}
+
+static nb::object sequence_item(nb::handle obj, Py_ssize_t index) {
+    PyObject *item = PySequence_GetItem(obj.ptr(), index);
+    if (item == nullptr) {
+        throw nb::python_error();
+    }
+    return nb::steal<nb::object>(item);
+}
+
+static void dict_delete_keys(nb::dict &result, nb::handle keys) {
+    for (const auto &key : iterable_to_vector(keys)) {
+        if (PyDict_DelItem(result.ptr(), key.ptr()) != 0) {
+            throw nb::python_error();
+        }
+    }
+}
+
+static void dict_delete_mapping_keys(nb::dict &result, nb::handle mapping) {
+    for (const auto &key : dict_keys(mapping)) {
+        if (PyDict_DelItem(result.ptr(), key.ptr()) != 0) {
+            throw nb::python_error();
+        }
+    }
+}
+
+static void dict_copy_items(nb::dict &result, nb::handle mapping) {
+    for (const auto &key : dict_keys(mapping)) {
+        dict_set(result, key, dict_get(mapping, key));
+    }
+}
+
+static void list_delete_positions(nb::list &result, nb::handle positions) {
+    for (const auto &pos_obj : iterable_to_vector(positions)) {
+        if (PySequence_DelItem(result.ptr(), as_long(pos_obj)) != 0) {
+            throw nb::python_error();
+        }
+    }
+}
+
+static void list_delete_pairs(nb::list &result, nb::handle pairs, bool reverse = false) {
+    std::vector<nb::object> items = sequence_to_vector(pairs);
+    if (reverse) {
+        for (auto it = items.rbegin(); it != items.rend(); ++it) {
+            if (PySequence_DelItem(result.ptr(), as_long(sequence_item(*it, 0))) != 0) {
+                throw nb::python_error();
+            }
+        }
+    } else {
+        for (const auto &item : items) {
+            if (PySequence_DelItem(result.ptr(), as_long(sequence_item(item, 0))) != 0) {
+                throw nb::python_error();
+            }
+        }
+    }
+}
+
+static void list_insert_pairs(nb::list &result, nb::handle pairs, bool reverse = false) {
+    std::vector<nb::object> items = sequence_to_vector(pairs);
+    if (reverse) {
+        for (auto it = items.rbegin(); it != items.rend(); ++it) {
+            nb::object index = sequence_item(*it, 0);
+            nb::object value = sequence_item(*it, 1);
+            if (PyList_Insert(result.ptr(), as_long(index), value.ptr()) != 0) {
+                throw nb::python_error();
+            }
+        }
+    } else {
+        for (const auto &item : items) {
+            nb::object index = sequence_item(item, 0);
+            nb::object value = sequence_item(item, 1);
+            if (PyList_Insert(result.ptr(), as_long(index), value.ptr()) != 0) {
+                throw nb::python_error();
+            }
+        }
+    }
+}
+
+template <typename Recur>
+static void patch_list_items(nb::list &result, nb::handle d, Recur recur) {
+    for (const auto &key : dict_keys(d)) {
+        if (py_equal(key, g_symbols.delete_) || py_equal(key, g_symbols.insert)) {
+            continue;
+        }
+        long index = as_long(key);
+        nb::object current = sequence_item(result, index);
+        nb::object patched = recur(current, dict_get(d, key));
+        if (PySequence_SetItem(result.ptr(), index, patched.ptr()) != 0) {
+            throw nb::python_error();
+        }
+    }
+}
+
+static void set_discard_all(nb::set &result, nb::handle values) {
+    for (const auto &item : iterable_to_vector(values)) {
+        if (PySet_Discard(result.ptr(), item.ptr()) < 0) {
+            throw nb::python_error();
+        }
+    }
+}
+
+static void set_add_all(nb::set &result, nb::handle values) {
+    for (const auto &item : iterable_to_vector(values)) {
+        if (PySet_Add(result.ptr(), item.ptr()) != 0) {
+            throw nb::python_error();
+        }
+    }
+}
+
 static std::string obj_to_string(nb::handle obj) {
     return nb::cast<std::string>(nb::str(obj));
 }
@@ -852,6 +967,170 @@ static DiffResult obj_diff(
     return DiffResult{emit_value_diff(syntax, a, b, 1.0), 1.0};
 }
 
+static nb::object patch_compact_like(nb::handle a, nb::handle d) {
+    if (is_dict(d)) {
+        if (py_len(d) == 0) {
+            return nb::borrow<nb::object>(a);
+        }
+        if (dict_contains(d, g_symbols.replace)) {
+            return dict_get(d, g_symbols.replace);
+        }
+        if (is_dict(a)) {
+            nb::dict result = copy_dict(a);
+            for (const auto &key : dict_keys(d)) {
+                nb::object value = dict_get(d, key);
+                if (py_equal(key, g_symbols.delete_)) {
+                    dict_delete_keys(result, value);
+                } else {
+                    if (!dict_contains(result, key)) {
+                        dict_set(result, key, value);
+                    } else {
+                        nb::object current = dict_get(result, key);
+                        dict_set(result, key, patch_compact_like(current, value));
+                    }
+                }
+            }
+            return result;
+        }
+        if (is_list_like(a)) {
+            bool was_tuple = is_tuple(a);
+            nb::list result = copy_list(a);
+            if (dict_contains(d, g_symbols.delete_)) {
+                list_delete_positions(result, dict_get(d, g_symbols.delete_));
+            }
+            if (dict_contains(d, g_symbols.insert)) {
+                list_insert_pairs(result, dict_get(d, g_symbols.insert));
+            }
+            patch_list_items(result, d, patch_compact_like);
+            if (was_tuple) {
+                return list_to_tuple(result);
+            }
+            return result;
+        }
+        if (is_set(a)) {
+            nb::set result = copy_set(a);
+            if (dict_contains(d, g_symbols.discard)) {
+                set_discard_all(result, dict_get(d, g_symbols.discard));
+            }
+            if (dict_contains(d, g_symbols.add)) {
+                set_add_all(result, dict_get(d, g_symbols.add));
+            }
+            return result;
+        }
+    }
+    return nb::borrow<nb::object>(d);
+}
+
+static nb::object patch_symmetric(nb::handle a, nb::handle d) {
+    if (is_list(d)) {
+        PyObject *value = PySequence_GetItem(d.ptr(), 1);
+        if (value == nullptr) {
+            throw nb::python_error();
+        }
+        return nb::steal<nb::object>(value);
+    }
+    if (is_dict(d)) {
+        if (py_len(d) == 0) {
+            return nb::borrow<nb::object>(a);
+        }
+        if (is_dict(a)) {
+            nb::dict result = copy_dict(a);
+            for (const auto &key : dict_keys(d)) {
+                nb::object value = dict_get(d, key);
+                if (py_equal(key, g_symbols.delete_)) {
+                    dict_delete_mapping_keys(result, value);
+                } else if (py_equal(key, g_symbols.insert)) {
+                    dict_copy_items(result, value);
+                } else {
+                    dict_set(result, key, patch_symmetric(dict_get(result, key), value));
+                }
+            }
+            return result;
+        }
+        if (is_list_like(a)) {
+            bool was_tuple = is_tuple(a);
+            nb::list result = copy_list(a);
+            if (dict_contains(d, g_symbols.delete_)) {
+                list_delete_pairs(result, dict_get(d, g_symbols.delete_));
+            }
+            if (dict_contains(d, g_symbols.insert)) {
+                list_insert_pairs(result, dict_get(d, g_symbols.insert));
+            }
+            patch_list_items(result, d, patch_symmetric);
+            if (was_tuple) {
+                return list_to_tuple(result);
+            }
+            return result;
+        }
+        if (is_set(a)) {
+            nb::set result = copy_set(a);
+            if (dict_contains(d, g_symbols.discard)) {
+                set_discard_all(result, dict_get(d, g_symbols.discard));
+            }
+            if (dict_contains(d, g_symbols.add)) {
+                set_add_all(result, dict_get(d, g_symbols.add));
+            }
+            return result;
+        }
+    }
+    throw nb::value_error("Invalid symmetric diff");
+}
+
+static nb::object unpatch_symmetric(nb::handle b, nb::handle d) {
+    if (is_list(d)) {
+        PyObject *value = PySequence_GetItem(d.ptr(), 0);
+        if (value == nullptr) {
+            throw nb::python_error();
+        }
+        return nb::steal<nb::object>(value);
+    }
+    if (is_dict(d)) {
+        if (py_len(d) == 0) {
+            return nb::borrow<nb::object>(b);
+        }
+        if (is_dict(b)) {
+            nb::dict result = copy_dict(b);
+            for (const auto &key : dict_keys(d)) {
+                nb::object value = dict_get(d, key);
+                if (py_equal(key, g_symbols.delete_)) {
+                    dict_copy_items(result, value);
+                } else if (py_equal(key, g_symbols.insert)) {
+                    dict_delete_mapping_keys(result, value);
+                } else {
+                    dict_set(result, key, unpatch_symmetric(dict_get(result, key), value));
+                }
+            }
+            return result;
+        }
+        if (is_list_like(b)) {
+            bool was_tuple = is_tuple(b);
+            nb::list result = copy_list(b);
+            patch_list_items(result, d, unpatch_symmetric);
+            if (dict_contains(d, g_symbols.insert)) {
+                list_delete_pairs(result, dict_get(d, g_symbols.insert), true);
+            }
+            if (dict_contains(d, g_symbols.delete_)) {
+                list_insert_pairs(result, dict_get(d, g_symbols.delete_), true);
+            }
+            if (was_tuple) {
+                return list_to_tuple(result);
+            }
+            return result;
+        }
+        if (is_set(b)) {
+            nb::set result = copy_set(b);
+            if (dict_contains(d, g_symbols.discard)) {
+                set_add_all(result, dict_get(d, g_symbols.discard));
+            }
+            if (dict_contains(d, g_symbols.add)) {
+                set_discard_all(result, dict_get(d, g_symbols.add));
+            }
+            return result;
+        }
+    }
+    throw nb::value_error("Invalid symmetric diff");
+}
+
 class JsonDumper {
 public:
     explicit JsonDumper(nb::dict kwargs = nb::dict()) : kwargs_(std::move(kwargs)) {}
@@ -1023,6 +1302,46 @@ public:
         }
         std::unordered_set<std::string> exclude_paths;
         return obj_diff(a, b, syntax_kind_, exclude_paths, "").similarity;
+    }
+
+    nb::object patch(nb::object a, nb::object d, nb::object fp = nb::none()) const {
+        if (load_) {
+            a = call_python(loader_, {a});
+            d = call_python(loader_, {d});
+        }
+        if (marshal_ || load_) {
+            d = unmarshal(d);
+        }
+        nb::object patched;
+        if (syntax_kind_ == SyntaxKind::Symmetric) {
+            patched = patch_symmetric(a, d);
+        } else if (syntax_kind_ == SyntaxKind::Compact || syntax_kind_ == SyntaxKind::RightOnly) {
+            patched = patch_compact_like(a, d);
+        } else {
+            throw nb::type_error("Patch is not implemented for explicit syntax");
+        }
+        if (dump_) {
+            return call_python(dumper_, {patched, fp});
+        }
+        return patched;
+    }
+
+    nb::object unpatch(nb::object b, nb::object d, nb::object fp = nb::none()) const {
+        if (load_) {
+            b = call_python(loader_, {b});
+            d = call_python(loader_, {d});
+        }
+        if (marshal_ || load_) {
+            d = unmarshal(d);
+        }
+        if (syntax_kind_ != SyntaxKind::Symmetric) {
+            throw nb::type_error("Unpatch is only implemented for symmetric syntax");
+        }
+        nb::object unpatched = unpatch_symmetric(b, d);
+        if (dump_) {
+            return call_python(dumper_, {unpatched, fp});
+        }
+        return unpatched;
     }
 
     nb::object marshal(nb::handle d) const {
@@ -1232,6 +1551,8 @@ NB_MODULE(module, m) {
         )
         .def("diff", &JsonDiffer::diff, nb::arg("a").none(), nb::arg("b").none(), nb::arg("fp") = nb::none(), nb::arg("exclude_paths") = nb::none())
         .def("similarity", &JsonDiffer::similarity, nb::arg("a").none(), nb::arg("b").none())
+        .def("patch", &JsonDiffer::patch, nb::arg("a").none(), nb::arg("d").none(), nb::arg("fp") = nb::none())
+        .def("unpatch", &JsonDiffer::unpatch, nb::arg("b").none(), nb::arg("d").none(), nb::arg("fp") = nb::none())
         .def(
             "marshal",
             [](JsonDiffer &self, nb::handle d) {
@@ -1264,6 +1585,42 @@ NB_MODULE(module, m) {
         nb::arg("dumper") = nb::none(),
         nb::arg("escape_str") = "$",
         nb::arg("exclude_paths") = nb::none()
+    );
+
+    m.def(
+        "patch",
+        [](nb::object a, nb::object d, nb::object fp, nb::object syntax, bool load, bool dump, bool marshal, nb::object loader, nb::object dumper, std::string escape_str) {
+            JsonDiffer differ(syntax, load, dump, marshal, loader, dumper, escape_str);
+            return differ.patch(a, d, fp);
+        },
+        nb::arg("a").none(),
+        nb::arg("d").none(),
+        nb::arg("fp") = nb::none(),
+        nb::arg("syntax") = nb::str("compact"),
+        nb::arg("load") = false,
+        nb::arg("dump") = false,
+        nb::arg("marshal") = false,
+        nb::arg("loader") = nb::none(),
+        nb::arg("dumper") = nb::none(),
+        nb::arg("escape_str") = "$"
+    );
+
+    m.def(
+        "unpatch",
+        [](nb::object b, nb::object d, nb::object fp, nb::object syntax, bool load, bool dump, bool marshal, nb::object loader, nb::object dumper, std::string escape_str) {
+            JsonDiffer differ(syntax, load, dump, marshal, loader, dumper, escape_str);
+            return differ.unpatch(b, d, fp);
+        },
+        nb::arg("b").none(),
+        nb::arg("d").none(),
+        nb::arg("fp") = nb::none(),
+        nb::arg("syntax") = nb::str("compact"),
+        nb::arg("load") = false,
+        nb::arg("dump") = false,
+        nb::arg("marshal") = false,
+        nb::arg("loader") = nb::none(),
+        nb::arg("dumper") = nb::none(),
+        nb::arg("escape_str") = "$"
     );
 
     m.def(

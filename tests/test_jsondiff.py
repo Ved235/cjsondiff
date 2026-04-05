@@ -6,7 +6,7 @@ import unittest
 import pytest
 
 import fastjsondiff as jsondiff
-from fastjsondiff.jsondiff import diff, replace, add, discard, insert, delete, JsonDiffer
+from fastjsondiff.jsondiff import diff, patch, unpatch, replace, add, discard, insert, delete, JsonDiffer
 
 from .utils import generate_random_json, perturbate_json
 
@@ -94,6 +94,18 @@ class JsonDiffTests(unittest.TestCase):
         dm = differ.marshal(d)
 
         self.assertEqual(d, differ.unmarshal(dm))
+
+    def test_patch_roundtrip(self):
+        a = {'a': 1, 'b': 2}
+        b = {'a': 1, 'c': 3}
+        d = diff(a, b)
+        self.assertEqual(b, patch(a, d))
+
+        left = ['x', {'v': 1}, 'y']
+        right = ['x', {'v': 2}, 'z']
+        symmetric = diff(left, right, syntax='symmetric')
+        self.assertEqual(right, patch(left, symmetric, syntax='symmetric'))
+        self.assertEqual(left, unpatch(right, symmetric, syntax='symmetric'))
 
     @given(strategies.randoms().map(generate_scenario_no_sets))
     @settings(max_examples=1000)
