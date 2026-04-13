@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(fastjsondiff LANGUAGES CXX)
+project(cjsondiff LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,4 +17,4 @@ find_package(nanobind CONFIG REQUIRED)
 
 nanobind_add_module(module src/module.cpp)
 
-install(TARGETS module LIBRARY DESTINATION fastjsondiff)
+install(TARGETS module LIBRARY DESTINATION cjsondiff)

@@ -5,8 +5,8 @@ import sys
 import unittest
 import pytest
 
-import fastjsondiff as jsondiff
-from fastjsondiff.jsondiff import diff, patch, unpatch, replace, add, discard, insert, delete, JsonDiffer
+import cjsondiff as jsondiff
+from cjsondiff.jsondiff import diff, patch, unpatch, replace, add, discard, insert, delete, JsonDiffer
 
 from .utils import generate_random_json, perturbate_json
 

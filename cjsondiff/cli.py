@@ -1,7 +1,7 @@
 import argparse
 import sys
 
-import fastjsondiff
+import cjsondiff
 
 
 def load_file(serializer, file_path):
@@ -26,7 +26,7 @@ def main():
     parser.add_argument("first")
     parser.add_argument("second")
     parser.add_argument(
-        "-s", "--syntax", choices=(fastjsondiff.builtin_syntaxes.keys()), default="compact",
+        "-s", "--syntax", choices=(cjsondiff.builtin_syntaxes.keys()), default="compact",
         help="Diff syntax controls how differences are rendered and applied",
     )
     parser.add_argument(
@@ -38,7 +38,7 @@ def main():
     )
 
     args = parser.parse_args()
-    serializer = fastjsondiff.Serializer(args.format, args.indent)
+    serializer = cjsondiff.Serializer(args.format, args.indent)
 
     parsed_first = load_file(serializer, args.first)
     parsed_second = load_file(serializer, args.second)
@@ -47,15 +47,15 @@ def main():
         return 1
 
     if args.operation == "diff":
-        result = fastjsondiff.diff(
+        result = cjsondiff.diff(
             parsed_first, parsed_second, marshal=True, syntax=args.syntax
         )
     elif args.operation == "patch":
-        result = fastjsondiff.patch(
+        result = cjsondiff.patch(
             parsed_first, parsed_second, marshal=True, syntax=args.syntax
         )
     else:
-        result = fastjsondiff.unpatch(
+        result = cjsondiff.unpatch(
             parsed_first, parsed_second, marshal=True, syntax=args.syntax
         )
 

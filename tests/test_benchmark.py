@@ -3,7 +3,7 @@ import copy
 import pytest
 
 import jsondiff as upstream_jsondiff
-from fastjsondiff import jsondiff as fast_jsondiff
+from cjsondiff import jsondiff as fast_jsondiff
 
 
 def _build_nested_case(section_count=24, items_per_section=60, mutate_stride=3):
@@ -100,7 +100,7 @@ DIFF_CASES = {
 
 IMPLEMENTATIONS = [
     pytest.param(upstream_jsondiff, id="jsondiff"),
-    pytest.param(fast_jsondiff, id="fastjsondiff"),
+    pytest.param(fast_jsondiff, id="cjsondiff"),
 ]
 
 
